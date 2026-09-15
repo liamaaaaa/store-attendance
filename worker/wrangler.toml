@@ -1,0 +1,12 @@
+name = "gps-attendance-api"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "gps-attendance"
+database_id = "REPLACE_WITH_D1_ID"
+
+[vars]
+ALLOWED_ORIGIN = "https://liamaaaaa.github.io"
+# ADMIN_KEY 는 시크릿으로 설정: wrangler secret put ADMIN_KEY (또는 대시보드 > Settings > Variables)
