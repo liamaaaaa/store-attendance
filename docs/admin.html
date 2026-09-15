@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>출퇴근 관리자</title>
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+</head>
+<body class="wide">
+<header>
+  <div><h1 id="title">출퇴근 관리자</h1><div class="sub" id="sub">관리자 키를 입력하세요</div></div>
+  <button class="icon-btn" id="btnLogout" title="로그아웃" hidden>⎋</button>
+</header>
+
+<section id="loginView" class="card" style="max-width:420px">
+  <h2>관리자 로그인</h2>
+  <label>관리자 키</label>
+  <input id="fKey" type="password" placeholder="ADMIN_KEY">
+  <div class="error" id="loginError"></div>
+  <button class="btn primary" id="btnLogin">로그인</button>
+</section>
+
+<section id="mainView" hidden>
+  <div class="grid2">
+    <!-- 매장 등록 -->
+    <div class="card">
+      <h2 id="storeFormTitle">매장 등록</h2>
+      <label>매장 검색 (카카오맵)</label>
+      <div class="row search">
+        <input id="fSearch" placeholder="상호 또는 주소">
+        <button class="btn" id="doSearch" type="button">검색</button>
+      </div>
+      <ul class="results" id="results"></ul>
+      <label>매장명</label>
+      <input id="sName" placeholder="제이드앤워터 성수점">
+      <label>주소</label>
+      <input id="sAddr" placeholder="도로명 주소">
+      <label>위도 / 경도 <span class="note" style="display:inline">(구글맵 링크 붙여넣기 가능)</span></label>
+      <div class="row"><input id="sLat" inputmode="decimal" placeholder="37.5445"><input id="sLng" inputmode="decimal" placeholder="127.0560"></div>
+      <label>허용 반경 (m) · 최소 10</label>
+      <input id="sRadius" inputmode="numeric" value="50">
+      <input id="sId" type="hidden"><input id="sPlace" type="hidden">
+      <div class="error" id="storeError"></div>
+      <div class="row">
+        <button class="btn primary" id="btnSaveStore">저장</button>
+        <button class="btn" id="btnNewStore">새 매장</button>
+      </div>
+      <button class="btn" id="btnMap">🗺 지도에서 좌표 확인</button>
+    </div>
+
+    <!-- 매장 목록 -->
+    <div class="card">
+      <h2>매장 목록</h2>
+      <div class="tablewrap"><table><thead><tr><th>ID</th><th>매장</th><th>주소</th><th>반경</th><th>상태</th><th></th></tr></thead><tbody id="storeRows"></tbody></table></div>
+    </div>
+  </div>
+
+  <!-- 근태 기록 -->
+  <div class="card">
+    <h2>근태 기록</h2>
+    <div class="toolbar">
+      <div><label>매장</label><select id="qStore"><option value="">전체</option></select></div>
+      <div><label>시작일</label><input id="qFrom" type="date"></div>
+      <div><label>종료일</label><input id="qTo" type="date"></div>
+      <div><label>필터</label><select id="qFlag"><option value="">전체</option><option value="1">확인 필요만</option></select></div>
+      <button class="btn primary" id="btnQuery">조회</button>
+      <button class="btn" id="btnCsv">CSV</button>
+    </div>
+    <div class="note">"확인 필요"는 서버 재검증에서 반경 밖이거나 클라이언트 판정과 불일치한 기록입니다.</div>
+    <div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>일시</th><th>매장</th><th>이름</th><th>구분</th><th>거리</th><th>오차</th><th>반경</th><th>판정</th></tr></thead><tbody id="attRows"></tbody></table></div>
+  </div>
+
+  <!-- 근로자 -->
+  <div class="card">
+    <h2>근로자</h2>
+    <div class="tablewrap"><table><thead><tr><th>ID</th><th>이름</th><th>전화</th><th>매장</th><th>가입일</th><th>상태</th><th></th></tr></thead><tbody id="userRows"></tbody></table></div>
+  </div>
+</section>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  const C = window.APP_CONFIG, API = C.API_BASE.replace(/\/$/, '');
+  const $ = id => document.getElementById(id);
+  const toast = m => { const t = $('toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove('show'), 2400); };
+  let key = sessionStorage.getItem('att.adminKey') || '';
+  let stores = [];
+
+  async function api(path, opt = {}) {
+    const res = await fetch(API + path, { ...opt, headers: { 'content-type': 'application/json', 'x-admin-key': key, ...(opt.headers || {}) }, body: opt.body ? JSON.stringify(opt.body) : undefined });
+    if (opt.raw) return res;
+    const j = await res.json().catch(() => ({ ok: false, error: 'HTTP ' + res.status }));
+    return { status: res.status, ...j };
+  }
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  // ---------- 로그인
+  $('btnLogin').onclick = async () => {
+    key = $('fKey').value.trim();
+    const r = await api('/admin/stores');
+    if (!r.ok) { $('loginError').textContent = r.error || '인증 실패'; return; }
+    sessionStorage.setItem('att.adminKey', key); enter(r.stores);
+  };
+  $('btnLogout').onclick = () => { sessionStorage.removeItem('att.adminKey'); location.reload(); };
+  async function enter(list) {
+    $('loginView').hidden = true; $('mainView').hidden = false; $('btnLogout').hidden = false;
+    $('sub').textContent = C.COMPANY_NAME || '';
+    stores = list || (await api('/admin/stores')).stores || [];
+    renderStores(); loadUsers();
+    const t = new Date(), f = new Date(t.getFullYear(), t.getMonth(), 1);
+    $('qFrom').value = f.toISOString().slice(0, 10); $('qTo').value = t.toISOString().slice(0, 10);
+    query();
+  }
+
+  // ---------- 매장
+  function renderStores() {
+    $('storeRows').innerHTML = stores.map(s => `<tr><td>${s.id}</td><td>${esc(s.name)}</td><td>${esc(s.address || '')}</td><td>${s.radius_m}m</td><td>${s.active ? '운영' : '중지'}</td>
+      <td><button class="btn small" data-edit="${s.id}">수정</button></td></tr>`).join('') || '<tr><td colspan="6" class="empty">등록된 매장이 없습니다</td></tr>';
+    $('qStore').innerHTML = '<option value="">전체</option>' + stores.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => editStore(+b.dataset.edit));
+  }
+  function editStore(id) {
+    const s = stores.find(x => x.id === id); if (!s) return;
+    $('storeFormTitle').textContent = `매장 수정 · #${s.id}`;
+    $('sId').value = s.id; $('sName').value = s.name; $('sAddr').value = s.address || ''; $('sLat').value = s.lat; $('sLng').value = s.lng; $('sRadius').value = s.radius_m; $('sPlace').value = s.kakao_place_id || '';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  $('btnNewStore').onclick = () => { $('storeFormTitle').textContent = '매장 등록'; ['sId', 'sName', 'sAddr', 'sLat', 'sLng', 'sPlace', 'fSearch'].forEach(i => $(i).value = ''); $('sRadius').value = 50; $('results').innerHTML = ''; };
+  $('btnSaveStore').onclick = async () => {
+    const body = { id: $('sId').value ? +$('sId').value : undefined, name: $('sName').value.trim(), address: $('sAddr').value.trim(), lat: parseFloat($('sLat').value), lng: parseFloat($('sLng').value), radius_m: parseInt($('sRadius').value, 10), kakao_place_id: $('sPlace').value || null };
+    $('storeError').textContent = '';
+    const r = await api('/admin/stores', { method: body.id ? 'PUT' : 'POST', body });
+    if (!r.ok) { $('storeError').textContent = r.error; return; }
+    toast(body.id ? '매장 수정됨' : '매장 등록됨');
+    stores = (await api('/admin/stores')).stores || []; renderStores(); $('btnNewStore').click();
+  };
+  $('btnMap').onclick = () => { const a = $('sLat').value, b = $('sLng').value; if (a && b) window.open(`https://www.google.com/maps?q=${a},${b}`, '_blank'); };
+  function parseCoords(s) { const m = String(s || '').match(/(-?\d{1,2}\.\d{3,})\s*,\s*(-?\d{1,3}\.\d{3,})/); if (!m) return null; const lat = +m[1], lng = +m[2]; return Math.abs(lat) <= 90 && Math.abs(lng) <= 180 ? { lat, lng } : null; }
+  ['sLat', 'sLng'].forEach(id => $(id).addEventListener('input', e => { const c = parseCoords(e.target.value); if (c) { $('sLat').value = c.lat.toFixed(6); $('sLng').value = c.lng.toFixed(6); toast('링크에서 좌표 추출됨'); } }));
+
+  // 카카오 검색
+  let kakaoReady = null;
+  function loadKakao() {
+    if (!C.KAKAO_JS_KEY) return Promise.resolve(false);
+    if (kakaoReady) return kakaoReady;
+    kakaoReady = new Promise(resolve => {
+      const s = document.createElement('script');
+      s.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(C.KAKAO_JS_KEY)}&libraries=services&autoload=false`;
+      s.onload = () => { try { kakao.maps.load(() => resolve(true)); } catch { resolve(false); } };
+      s.onerror = () => resolve(false); document.head.appendChild(s);
+    });
+    return kakaoReady;
+  }
+  async function search() {
+    const q = $('fSearch').value.trim(), ul = $('results'); if (!q) return;
+    ul.innerHTML = '<li class="msg">검색 중…</li>';
+    const ok = await loadKakao();
+    if (!ok) { ul.innerHTML = '<li class="msg">카카오 키가 설정되지 않았습니다 (config.js KAKAO_JS_KEY). 구글맵 링크를 좌표칸에 붙여넣어도 됩니다</li>'; return; }
+    new kakao.maps.services.Places().keywordSearch(q, (data, status) => {
+      if (status !== kakao.maps.services.Status.OK) { ul.innerHTML = '<li class="msg">결과 없음</li>'; return; }
+      ul.innerHTML = '';
+      data.slice(0, 8).forEach(p => {
+        const li = document.createElement('li');
+        li.innerHTML = `<b>${esc(p.place_name)}</b>${esc(p.road_address_name || p.address_name)}`;
+        li.onclick = () => { $('sName').value = $('sName').value || p.place_name; $('sAddr').value = p.road_address_name || p.address_name; $('sLat').value = (+p.y).toFixed(6); $('sLng').value = (+p.x).toFixed(6); $('sPlace').value = p.id; ul.innerHTML = ''; toast('좌표 입력됨'); };
+        ul.appendChild(li);
+      });
+    });
+  }
+  $('doSearch').onclick = search;
+  $('fSearch').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); search(); } });
+
+  // ---------- 근태
+  function qs() { const p = new URLSearchParams(); if ($('qStore').value) p.set('store_id', $('qStore').value); p.set('from', $('qFrom').value); p.set('to', $('qTo').value); if ($('qFlag').value) p.set('flagged', '1'); return p; }
+  async function query() {
+    const r = await api('/admin/attendance?' + qs());
+    if (!r.ok) { toast(r.error); return; }
+    $('attRows').innerHTML = r.records.map(a => `<tr class="${a.flagged ? 'flag' : ''}"><td>${esc(a.recorded_at).replace('T', ' ').slice(0, 19)}</td><td>${esc(a.store_name)}</td><td>${esc(a.user_name)}</td>
+      <td>${a.type === 'IN' ? '출근' : '퇴근'}</td><td>${a.distance_m}m</td><td>±${a.accuracy_m}m</td><td>${a.store_radius_m}m</td><td>${a.in_range ? '반경 안' : '반경 밖'}${a.flagged ? ' · 확인 필요' : ''}</td></tr>`).join('')
+      || '<tr><td colspan="8" class="empty">기록 없음</td></tr>';
+  }
+  $('btnQuery').onclick = () => { query(); loadUsers(); };
+  $('btnCsv').onclick = async () => {
+    const res = await api('/admin/attendance?' + qs() + '&format=csv', { raw: true });
+    const blob = await res.blob(); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `attendance_${$('qFrom').value}_${$('qTo').value}.csv`; a.click();
+  };
+
+  // ---------- 근로자
+  async function loadUsers() {
+    const r = await api('/admin/users'); if (!r.ok) return;
+    $('userRows').innerHTML = r.users.map(u => `<tr><td>${u.id}</td><td>${esc(u.name)}</td><td>${esc(u.phone)}</td><td>${esc(u.store_name || '')}</td><td>${esc(u.created_at).slice(0, 10)}</td><td>${u.active ? '활성' : '비활성'}</td>
+      <td><button class="btn small" data-toggle="${u.id}" data-active="${u.active}">${u.active ? '비활성화' : '활성화'}</button> <button class="btn small" data-pin="${u.id}">PIN 초기화</button></td></tr>`).join('') || '<tr><td colspan="7" class="empty">가입자 없음</td></tr>';
+    document.querySelectorAll('[data-toggle]').forEach(b => b.onclick = async () => { await api('/admin/users', { method: 'POST', body: { id: +b.dataset.toggle, active: b.dataset.active !== '1' } }); loadUsers(); });
+    document.querySelectorAll('[data-pin]').forEach(b => b.onclick = async () => { const pin = prompt('새 PIN (숫자 4~6자리)'); if (pin && /^\d{4,6}$/.test(pin)) { await api('/admin/users', { method: 'POST', body: { id: +b.dataset.pin, reset_pin: pin } }); toast('PIN 초기화됨'); } });
+  }
+
+  $('title').textContent = (C.COMPANY_NAME ? C.COMPANY_NAME + ' ' : '') + '출퇴근 관리자';
+  if (key) enter();
+})();
+</script>
+</body>
+</html>
